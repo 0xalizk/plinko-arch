@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Plinko PIR Design</title>
+  <script src="https://unpkg.com/react@18/umd/react.development.js" crossorigin></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js" crossorigin></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <style>html, body, #root { margin: 0; padding: 0; width: 100%; height: 100%; }</style>
+</head>
+<body>
+  <div id="root"></div>
+  <script>
+    // Fetch the JSX file, strip the import/export, and transpile with Babel
+    fetch("plinko-pir-design-v2.jsx")
+      .then(r => r.text())
+      .then(code => {
+        // Replace the ES module import with a destructure from the React global
+        code = code.replace(/^import\s*\{([^}]+)\}\s*from\s*["']react["'];?\s*/m,
+          "const {$1} = React;\n");
+        // Replace "export default function App" with just "function App"
+        code = code.replace(/export\s+default\s+function/, "function");
+
+        // Transpile JSX via Babel standalone
+        const transformed = Babel.transform(code, {
+          presets: ["react"],
+        }).code;
+
+        // Execute the transpiled code
+        const script = document.createElement("script");
+        script.textContent = transformed;
+        document.body.appendChild(script);
+
+        // Render
+        const root = ReactDOM.createRoot(document.getElementById("root"));
+        root.render(React.createElement(App));
+      })
+      .catch(err => {
+        document.getElementById("root").textContent = "Error loading component: " + err.message;
+        console.error(err);
+      });
+  </script>
+</body>
+</html>

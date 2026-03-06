@@ -1,0 +1,989 @@
+import { useState } from "react";
+
+// ─── Palette ────────────────────────────────────────────────────────────────
+const C = {
+  bg:        "#ffffff",
+  bgAlt:     "#f8f9fb",
+  bgTint:    "#f2f5f9",
+  border:    "#d4dce8",
+  borderMid: "#b0bece",
+  client:    "#1d4ed8",  // indigo
+  clientBg:  "#eff6ff",
+  server:    "#15803d",  // green
+  serverBg:  "#f0fdf4",
+  crypto:    "#b45309",  // amber
+  cryptoBg:  "#fffbeb",
+  state:     "#6d28d9",  // violet
+  stateBg:   "#f5f3ff",
+  msg:       "#0e7490",  // teal
+  msgBg:     "#ecfeff",
+  danger:    "#be123c",
+  dangerBg:  "#fff1f2",
+  neutral:   "#374151",
+  dim:       "#9ca3af",
+  dimMid:    "#6b7280",
+  black:     "#111827",
+  accent:    "#2563eb",
+  grid:      "#e5eaf2",
+};
+
+const FONT = "'IBM Plex Mono', 'Fira Code', monospace";
+const SANS = "'IBM Plex Sans', 'Segoe UI', sans-serif";
+
+const css = `
+  @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@300;400;600;700&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap');
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: #ffffff; }
+  .tab-btn { cursor: pointer; border: none; background: none; font-family: ${SANS}; transition: all 0.15s; }
+  .tab-btn:hover { background: #f0f4ff; }
+  .node-g { cursor: default; }
+  .node-g:hover .node-rect { filter: brightness(0.97); }
+  table { border-collapse: collapse; width: 100%; }
+  th, td { padding: 6px 12px; text-align: left; border: 1px solid ${C.border}; font-size: 11px; font-family: ${FONT}; }
+  th { background: ${C.bgTint}; font-weight: 600; color: ${C.black}; }
+  td { color: ${C.neutral}; }
+  tr:nth-child(even) td { background: ${C.bgAlt}; }
+  .highlight td { background: #eff6ff !important; color: ${C.client}; font-weight: 600; }
+`;
+
+const TABS = [
+  "① Architecture",
+  "② Crypto Stack",
+  "③ Offline Phase",
+  "④ Online Phase",
+  "⑤ Data Model",
+];
+
+// ─── Shared SVG helpers ──────────────────────────────────────────────────────
+
+function Grid({ w, h, step = 24 }) {
+  return (
+    <g>
+      {Array.from({ length: Math.ceil(h / step) + 1 }).map((_, i) => (
+        <line key={`h${i}`} x1={0} y1={i * step} x2={w} y2={i * step}
+          stroke={C.grid} strokeWidth={0.5} />
+      ))}
+      {Array.from({ length: Math.ceil(w / step) + 1 }).map((_, i) => (
+        <line key={`v${i}`} x1={i * step} y1={0} x2={i * step} y2={h}
+          stroke={C.grid} strokeWidth={0.5} />
+      ))}
+    </g>
+  );
+}
+
+function ArrowMarker({ id, color }) {
+  return (
+    <marker id={id} markerWidth={8} markerHeight={8} refX={7} refY={4} orient="auto">
+      <polygon points="0 1, 8 4, 0 7" fill={color} />
+    </marker>
+  );
+}
+
+function DiamondMarker({ id, color }) {
+  return (
+    <marker id={id} markerWidth={10} markerHeight={8} refX={0} refY={4} orient="auto">
+      <polygon points="0 4, 4 1, 8 4, 4 7" fill={color} />
+    </marker>
+  );
+}
+
+// ─── 1. Architecture Overview ────────────────────────────────────────────────
+
+const ARCH_NODES = [
+  // ── Client subsystem
+  { id:"client",    x:40,  y:110, w:160, h:56, label:"Client",       sub:"client.py",      color:C.client, bg:C.clientBg,
+    methods:["generate_hints(stream)","query(indices[])","extract(responses[])","replenish_hints()","update_hints(updates[])","remaining_queries()"] },
+  { id:"hstate",    x:40,  y:230, w:160, h:52, label:"HintState",    sub:"client-side",    color:C.state,  bg:C.stateBg,
+    methods:["cutoffs[λw+q]","parities[λw+q]","flips[λw]","extras[q]","backup_parities_high[q]"] },
+  { id:"qcache",    x:40,  y:348, w:160, h:52, label:"QueryCache",   sub:"client-side",    color:C.state,  bg:C.stateBg,
+    methods:["lookup(index)","insert(idx,ans,hid)","invalidate(idx)"] },
+  { id:"params",    x:40,  y:466, w:160, h:52, label:"Params",       sub:"params.py",      color:C.dimMid, bg:C.bgAlt,
+    methods:["n, B, λ, w","c=n/w, r=λw","q=num_backups"] },
+  // ── Crypto subsystem
+  { id:"iprf",      x:270, y:180, w:150, h:52, label:"iPRF",         sub:"iprf.py",        color:C.crypto, bg:C.cryptoBg,
+    methods:["F(k,x) = S(P(x))","F⁻¹(k,y) = {P⁻¹(z): z∈S⁻¹(y)}","per-block key K[α]"] },
+  { id:"prp",       x:270, y:298, w:150, h:52, label:"PRP",          sub:"prp.py (MR14)",  color:C.crypto, bg:C.cryptoBg,
+    methods:["π: [N]→[N]","π⁻¹: [N]→[N]","Sometimes-Recurse Shuffle"] },
+  { id:"pmns",      x:270, y:416, w:150, h:52, label:"PMNS",         sub:"pmns.py",        color:C.crypto, bg:C.cryptoBg,
+    methods:["S(k,x): [n]→[m]","S⁻¹(k,y): [m]→2^[n]","binary tree, depth ⌈log m⌉"] },
+  { id:"utils",     x:270, y:534, w:150, h:52, label:"Utils",        sub:"utils.py",       color:C.dimMid, bg:C.bgAlt,
+    methods:["prf(key,input): SHAKE-256","prg(seed,len): bytes","xor(a,b): bytes"] },
+  // ── Protocol messages
+  { id:"query",     x:480, y:180, w:140, h:52, label:"Query",        sub:"messages.py",    color:C.msg,    bg:C.msgBg,
+    methods:["mask: bytes ⌈c/8⌉","offsets: list[int] c/2"] },
+  { id:"response",  x:480, y:298, w:140, h:52, label:"Response",     sub:"messages.py",    color:C.msg,    bg:C.msgBg,
+    methods:["p0: bytes B","p1: bytes B"] },
+  { id:"update",    x:480, y:416, w:140, h:52, label:"Update",       sub:"messages.py",    color:C.danger, bg:C.dangerBg,
+    methods:["index: int","delta: bytes (u⊕u')"] },
+  // ── Server subsystem
+  { id:"server",    x:680, y:110, w:150, h:56, label:"Server",       sub:"server.py",      color:C.server, bg:C.serverBg,
+    methods:["stream_database()","answer(queries[])","update_entries(dict)"] },
+  { id:"database",  x:680, y:230, w:150, h:52, label:"Database",     sub:"server-side",    color:C.server, bg:C.serverBg,
+    methods:["entries[0..n-1]: bytes","partition: c blocks of w","i = α·w + β"] },
+];
+
+const ARCH_EDGES = [
+  { from:"client", to:"query",    label:"creates",   style:"dash",    color:C.msg },
+  { from:"server", to:"response", label:"creates",   style:"dash",    color:C.server },
+  { from:"server", to:"update",   label:"creates",   style:"dash",    color:C.danger },
+  { from:"client", to:"hstate",   label:"owns ◆",    style:"compose", color:C.state },
+  { from:"client", to:"qcache",   label:"owns ◆",    style:"compose", color:C.state },
+  { from:"client", to:"params",   label:"reads",     style:"dot",     color:C.dimMid },
+  { from:"server", to:"params",   label:"reads",     style:"dot",     color:C.dimMid },
+  { from:"server", to:"database", label:"owns ◆",    style:"compose", color:C.server },
+  { from:"client", to:"iprf",     label:"inverts",   style:"solid",   color:C.crypto },
+  { from:"iprf",   to:"prp",      label:"uses P(·)", style:"solid",   color:C.crypto },
+  { from:"iprf",   to:"pmns",     label:"uses S(·)", style:"solid",   color:C.crypto },
+  { from:"client", to:"utils",    label:"PRF/XOR",   style:"solid",   color:C.dimMid },
+  { from:"server", to:"utils",    label:"XOR",       style:"solid",   color:C.dimMid },
+  { from:"utils",  to:"pmns",     label:"seeds",     style:"dot",     color:C.dimMid },
+];
+
+function Architecture() {
+  const [hov, setHov] = useState(null);
+  const W = 870, H = 640;
+  const map = Object.fromEntries(ARCH_NODES.map(n => [n.id, n]));
+
+  function ctr(id) { const n = map[id]; return { x: n.x + n.w / 2, y: n.y + n.h / 2 }; }
+  function edgePoints(e) {
+    const a = map[e.from], b = map[e.to];
+    const ac = ctr(e.from), bc = ctr(e.to);
+    const dx = bc.x - ac.x, dy = bc.y - ac.y;
+    const len = Math.hypot(dx, dy) || 1;
+    const nx = dx / len, ny = dy / len;
+    return {
+      x1: ac.x + nx * a.w / 2, y1: ac.y + ny * a.h / 2,
+      x2: bc.x - nx * b.w / 2, y2: bc.y - ny * b.h / 2,
+    };
+  }
+
+  const mkId = (i) => `arrA${i}`;
+
+  return (
+    <div style={{ position: "relative", fontFamily: FONT }}>
+      {/* Zone labels */}
+      {[
+        { label: "CLIENT SUBSYSTEM", x: 20, y: 78, color: C.client },
+        { label: "CRYPTO PRIMITIVES", x: 250, y: 148, color: C.crypto },
+        { label: "PROTOCOL MESSAGES", x: 460, y: 148, color: C.msg },
+        { label: "SERVER SUBSYSTEM", x: 660, y: 78, color: C.server },
+      ].map((z, i) => (
+        <div key={i} style={{
+          position: "absolute", left: z.x, top: z.y,
+          color: z.color, fontSize: 9, fontWeight: 700, letterSpacing: 1.5,
+          borderBottom: `1px solid ${z.color}30`, paddingBottom: 2,
+          width: 190,
+        }}>{z.label}</div>
+      ))}
+
+      <svg width={W} height={H} style={{ display: "block" }}>
+        <Grid w={W} h={H} step={24} />
+        <defs>
+          {ARCH_EDGES.map((e, i) => <ArrowMarker key={i} id={mkId(i)} color={e.color} />)}
+        </defs>
+
+        {/* Zone boxes */}
+        <rect x={20} y={88} width={200} height={450} rx={4} fill="none" stroke={C.client} strokeWidth={1} strokeDasharray="6 3" opacity={0.3} />
+        <rect x={250} y={158} width={190} height={445} rx={4} fill="none" stroke={C.crypto} strokeWidth={1} strokeDasharray="6 3" opacity={0.3} />
+        <rect x={460} y={158} width={180} height={310} rx={4} fill="none" stroke={C.msg} strokeWidth={1} strokeDasharray="6 3" opacity={0.3} />
+        <rect x={660} y={88} width={196} height={220} rx={4} fill="none" stroke={C.server} strokeWidth={1} strokeDasharray="6 3" opacity={0.3} />
+
+        {/* Edges */}
+        {ARCH_EDGES.map((e, i) => {
+          const { x1, y1, x2, y2 } = edgePoints(e);
+          const mx = (x1 + x2) / 2, my = (y1 + y2) / 2;
+          const isHov = hov === e.from || hov === e.to;
+          const dash = e.style === "dot" ? "3 4" : e.style === "dash" ? "7 3" : "none";
+          return (
+            <g key={i}>
+              <line x1={x1} y1={y1} x2={x2} y2={y2}
+                stroke={e.color}
+                strokeWidth={isHov ? 2 : 1.2}
+                strokeDasharray={dash}
+                markerEnd={`url(#${mkId(i)})`}
+                opacity={isHov ? 1 : 0.55}
+              />
+              {e.label && (
+                <text x={mx} y={my - 4} fill={e.color} fontSize={8} textAnchor="middle"
+                  fontFamily={FONT} opacity={isHov ? 1 : 0.6}>{e.label}</text>
+              )}
+            </g>
+          );
+        })}
+
+        {/* Nodes */}
+        {ARCH_NODES.map(n => {
+          const isHov = hov === n.id;
+          return (
+            <g key={n.id} className="node-g"
+              onMouseEnter={() => setHov(n.id)}
+              onMouseLeave={() => setHov(null)}>
+              <rect className="node-rect"
+                x={n.x} y={n.y} width={n.w} height={n.h} rx={4}
+                fill={n.bg}
+                stroke={isHov ? n.color : C.border}
+                strokeWidth={isHov ? 2 : 1}
+                style={{ filter: isHov ? `drop-shadow(0 2px 8px ${n.color}30)` : "none" }}
+              />
+              {/* Name bar */}
+              <rect x={n.x} y={n.y} width={n.w} height={18} rx={4}
+                fill={n.color + "14"} />
+              <text x={n.x + n.w / 2} y={n.y + 12}
+                fill={n.color} fontSize={10} fontWeight={700} textAnchor="middle" fontFamily={FONT}>
+                {n.label}
+              </text>
+              <line x1={n.x} y1={n.y + 18} x2={n.x + n.w} y2={n.y + 18}
+                stroke={n.color + "30"} strokeWidth={1} />
+              <text x={n.x + n.w / 2} y={n.y + 30}
+                fill={C.dim} fontSize={8} textAnchor="middle" fontFamily={FONT}>
+                {n.sub}
+              </text>
+              {isHov && n.methods.length > 0 && (
+                <text x={n.x + n.w / 2} y={n.y + 44}
+                  fill={n.color} fontSize={7.5} textAnchor="middle" fontFamily={FONT} opacity={0.8}>
+                  {n.methods.length} members
+                </text>
+              )}
+            </g>
+          );
+        })}
+      </svg>
+
+      {/* Hover tooltip */}
+      {hov && (() => {
+        const n = map[hov];
+        if (!n) return null;
+        const tipX = n.x + n.w + 14;
+        const tipY = n.y;
+        return (
+          <div style={{
+            position: "absolute", left: tipX > W - 220 ? n.x - 224 : tipX, top: tipY,
+            background: C.bg, border: `1.5px solid ${n.color}50`,
+            borderRadius: 6, padding: "10px 14px", minWidth: 200, maxWidth: 240,
+            boxShadow: "0 4px 16px rgba(0,0,0,0.12)", zIndex: 20, fontFamily: FONT,
+          }}>
+            <div style={{ color: n.color, fontSize: 11, fontWeight: 700, marginBottom: 6 }}>
+              {n.label}
+            </div>
+            {n.methods.map((m, i) => (
+              <div key={i} style={{
+                color: C.neutral, fontSize: 9.5, lineHeight: 1.8,
+                borderLeft: `2px solid ${n.color}30`, paddingLeft: 8,
+              }}>{m}</div>
+            ))}
+          </div>
+        );
+      })()}
+
+      {/* Legend */}
+      <div style={{ display: "flex", gap: 20, marginTop: 8, paddingLeft: 20, fontFamily: FONT }}>
+        {[
+          { dash: "none", color: C.crypto, label: "uses / calls" },
+          { dash: "7 3",  color: C.msg,    label: "creates message" },
+          { dash: "none", color: C.state,  label: "owns (composition)" },
+          { dash: "3 4",  color: C.dimMid, label: "reads config" },
+        ].map((l, i) => (
+          <div key={i} style={{ display: "flex", alignItems: "center", gap: 6 }}>
+            <svg width={28} height={10}>
+              <defs><ArrowMarker id={`leg${i}`} color={l.color} /></defs>
+              <line x1={2} y1={5} x2={22} y2={5} stroke={l.color} strokeWidth={1.5}
+                strokeDasharray={l.dash} markerEnd={`url(#leg${i})`} />
+            </svg>
+            <span style={{ color: C.dimMid, fontSize: 9 }}>{l.label}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ─── 2. Crypto Stack ─────────────────────────────────────────────────────────
+
+function CryptoStack() {
+  const W = 860, H = 620;
+
+  // PMNS tree diagram
+  function PmnsTree() {
+    const nodes = [
+      { id:"root", x:320, y:40,  label:"root",       sub:"n balls, m bins" },
+      { id:"L1",   x:200, y:120, label:"left",        sub:"Bin(n, ½; F(k,0))" },
+      { id:"R1",   x:440, y:120, label:"right",       sub:"Bin(n, ½; F(k,1))" },
+      { id:"L2",   x:130, y:200, label:"bin 0",       sub:"leaf" },
+      { id:"L3",   x:270, y:200, label:"bin 1",       sub:"leaf" },
+      { id:"R2",   x:370, y:200, label:"bin 2",       sub:"leaf" },
+      { id:"R3",   x:510, y:200, label:"bin 3",       sub:"leaf" },
+    ];
+    const edges = [
+      { x1:320, y1:56, x2:210, y2:118 },
+      { x1:320, y1:56, x2:450, y2:118 },
+      { x1:200, y1:136, x2:140, y2:198 },
+      { x1:200, y1:136, x2:280, y2:198 },
+      { x1:440, y1:136, x2:380, y2:198 },
+      { x1:440, y1:136, x2:520, y2:198 },
+    ];
+    return (
+      <g>
+        {edges.map((e, i) => (
+          <line key={i} x1={e.x1} y1={e.y1} x2={e.x2} y2={e.y2}
+            stroke={C.crypto} strokeWidth={1.2} opacity={0.5} />
+        ))}
+        {nodes.map(n => (
+          <g key={n.id}>
+            <rect x={n.x - 46} y={n.y - 16} width={92} height={34} rx={4}
+              fill={C.cryptoBg} stroke={C.crypto} strokeWidth={1} />
+            <text x={n.x} y={n.y - 2} fill={C.crypto} fontSize={9.5} textAnchor="middle"
+              fontFamily={FONT} fontWeight={600}>{n.label}</text>
+            <text x={n.x} y={n.y + 11} fill={C.dim} fontSize={8} textAnchor="middle"
+              fontFamily={FONT}>{n.sub}</text>
+          </g>
+        ))}
+        <text x={320} y={260} fill={C.dim} fontSize={8.5} textAnchor="middle" fontFamily={FONT}>
+          depth = ⌈log₂ m⌉ · O(log m) PRF calls per evaluation
+        </text>
+      </g>
+    );
+  }
+
+  // Key hierarchy diagram
+  function KeyHierarchy() {
+    const boxes = [
+      { x:20,  y:0,  w:100, h:32, label:"msk",         sub:"master key",      color:C.client },
+      { x:20,  y:80, w:140, h:32, label:"K[α]",         sub:"PRF(msk, α) per block",  color:C.crypto },
+      { x:20,  y:160,w:100, h:32, label:"k₁",           sub:"PRP key",         color:C.crypto },
+      { x:140, y:160,w:100, h:32, label:"k₂",           sub:"PMNS encoding",   color:C.crypto },
+    ];
+    const arrows = [
+      { x1:70, y1:32, x2:90, y2:78 },
+      { x1:90, y1:112, x2:70, y2:158 },
+      { x1:90, y1:112, x2:190, y2:158 },
+    ];
+    return (
+      <g transform="translate(0, 0)">
+        {arrows.map((a, i) => (
+          <g key={i}>
+            <defs><ArrowMarker id={`kh${i}`} color={C.dimMid} /></defs>
+            <line x1={a.x1} y1={a.y1} x2={a.x2} y2={a.y2}
+              stroke={C.dimMid} strokeWidth={1.2} markerEnd={`url(#kh${i})`} />
+          </g>
+        ))}
+        {boxes.map((b, i) => (
+          <g key={i}>
+            <rect x={b.x} y={b.y} width={b.w} height={b.h} rx={4}
+              fill={b.color + "12"} stroke={b.color} strokeWidth={1.2} />
+            <text x={b.x + b.w / 2} y={b.y + 13} fill={b.color}
+              fontSize={11} fontWeight={700} textAnchor="middle" fontFamily={FONT}>{b.label}</text>
+            <text x={b.x + b.w / 2} y={b.y + 26} fill={C.dim}
+              fontSize={8} textAnchor="middle" fontFamily={FONT}>{b.sub}</text>
+          </g>
+        ))}
+        <text x={10} y={220} fill={C.dimMid} fontSize={8} fontFamily={FONT}>one key per block α ∈ [c]</text>
+      </g>
+    );
+  }
+
+  // iPRF composition diagram
+  function IprfComposition() {
+    const steps = [
+      { x: 40,  y: 60, w: 90, h: 34, label: "x ∈ [n]",     color: C.client,  fill: C.clientBg },
+      { x: 160, y: 60, w: 90, h: 34, label: "P(x) ∈ [n]",  color: C.crypto,  fill: C.cryptoBg, sub:"PRP π" },
+      { x: 280, y: 60, w: 90, h: 34, label: "S(P(x))∈[m]",  color: C.crypto,  fill: C.cryptoBg, sub:"PMNS S" },
+      { x: 400, y: 60, w: 90, h: 34, label: "y = F(x)",     color: C.server,  fill: C.serverBg },
+    ];
+    const inv = [
+      { x: 400, y: 160, w: 90, h: 34, label: "y ∈ [m]",     color: C.server,  fill: C.serverBg },
+      { x: 270, y: 160, w: 110, h: 34, label: "S⁻¹(y)⊆[n]", color: C.crypto,  fill: C.cryptoBg, sub:"PMNS S⁻¹" },
+      { x: 130, y: 160, w: 120, h: 34, label: "{P⁻¹(z):z∈·}", color: C.crypto, fill: C.cryptoBg, sub:"PRP π⁻¹" },
+      { x: 10,  y: 160, w: 100, h: 34, label: "F⁻¹(y)⊆[n]",  color: C.client,  fill: C.clientBg },
+    ];
+    return (
+      <g>
+        <text x={250} y={18} fill={C.dimMid} fontSize={9} textAnchor="middle" fontFamily={FONT} letterSpacing={1}>FORWARD  F(x) = S(P(x))</text>
+        {steps.map((s, i) => (
+          <g key={i}>
+            <rect x={s.x} y={s.y} width={s.w} height={s.h} rx={4} fill={s.fill} stroke={s.color} strokeWidth={1.2} />
+            <text x={s.x + s.w / 2} y={s.y + 14} fill={s.color} fontSize={9.5} fontWeight={600} textAnchor="middle" fontFamily={FONT}>{s.label}</text>
+            {s.sub && <text x={s.x + s.w / 2} y={s.y + 27} fill={C.dim} fontSize={7.5} textAnchor="middle" fontFamily={FONT}>{s.sub}</text>}
+          </g>
+        ))}
+        {[0,1,2].map(i => {
+          const a = steps[i], b = steps[i+1];
+          return (
+            <g key={i}>
+              <defs><ArrowMarker id={`fwd${i}`} color={C.crypto} /></defs>
+              <line x1={a.x + a.w} y1={a.y + 17} x2={b.x} y2={b.y + 17}
+                stroke={C.crypto} strokeWidth={1.5} markerEnd={`url(#fwd${i})`} />
+            </g>
+          );
+        })}
+
+        <text x={250} y={142} fill={C.dimMid} fontSize={9} textAnchor="middle" fontFamily={FONT} letterSpacing={1}>INVERSE  F⁻¹(y) = &#123;P⁻¹(z) : z ∈ S⁻¹(y)&#125;</text>
+        {inv.map((s, i) => (
+          <g key={i}>
+            <rect x={s.x} y={s.y} width={s.w} height={s.h} rx={4} fill={s.fill} stroke={s.color} strokeWidth={1.2} />
+            <text x={s.x + s.w / 2} y={s.y + 14} fill={s.color} fontSize={9} fontWeight={600} textAnchor="middle" fontFamily={FONT}>{s.label}</text>
+            {s.sub && <text x={s.x + s.w / 2} y={s.y + 27} fill={C.dim} fontSize={7.5} textAnchor="middle" fontFamily={FONT}>{s.sub}</text>}
+          </g>
+        ))}
+        {[0,1,2].map(i => {
+          const a = inv[i], b = inv[i+1];
+          return (
+            <g key={i}>
+              <defs><ArrowMarker id={`inv${i}`} color={C.state} /></defs>
+              <line x1={a.x} y1={a.y + 17} x2={b.x + b.w} y2={b.y + 17}
+                stroke={C.state} strokeWidth={1.5} markerEnd={`url(#inv${i})`} />
+            </g>
+          );
+        })}
+      </g>
+    );
+  }
+
+  // Primitive stack
+  function PrimStack() {
+    const layers = [
+      { label:"One-Way Function (OWF)",   sub:"minimal assumption — no PKC needed",   color:"#374151", bg:"#f3f4f6", y:0 },
+      { label:"PRF  (GGM84)",             sub:"SHAKE-256 in impl; from OWF",          color:C.dimMid, bg:C.bgAlt, y:50 },
+      { label:"PRP  (Luby-Rackoff LR88)", sub:"4-round Feistel; MR14 small-domain",   color:C.crypto, bg:C.cryptoBg, y:100 },
+      { label:"PMNS  (this paper)",        sub:"binary tree of binomial samples",      color:C.crypto, bg:C.cryptoBg, y:150 },
+      { label:"iPRF  (Theorem 4.4)",      sub:"F=S∘P; F⁻¹ via P⁻¹∘S⁻¹",             color:C.state,  bg:C.stateBg, y:200 },
+      { label:"Plinko PIR",               sub:"Theorem 5.3: t=Õ(n/r), update Õ(1)",   color:C.client, bg:C.clientBg, y:250 },
+    ];
+    return (
+      <g>
+        {layers.map((l, i) => (
+          <g key={i}>
+            {i > 0 && (
+              <g>
+                <defs><ArrowMarker id={`stk${i}`} color={C.dimMid} /></defs>
+                <line x1={100} y1={l.y} x2={100} y2={l.y + 2}
+                  stroke={C.dimMid} strokeWidth={1} markerEnd={`url(#stk${i})`} />
+              </g>
+            )}
+            <rect x={0} y={l.y + 2} width={200} height={36} rx={4}
+              fill={l.bg} stroke={l.color} strokeWidth={1.2} />
+            <text x={100} y={l.y + 16} fill={l.color} fontSize={10} fontWeight={700}
+              textAnchor="middle" fontFamily={FONT}>{l.label}</text>
+            <text x={100} y={l.y + 30} fill={C.dim} fontSize={7.5}
+              textAnchor="middle" fontFamily={FONT}>{l.sub}</text>
+          </g>
+        ))}
+      </g>
+    );
+  }
+
+  return (
+    <svg width={W} height={H} style={{ display: "block", margin: "0 auto" }}>
+      <Grid w={W} h={H} step={24} />
+
+      {/* Section headers */}
+      {[
+        { x: 20,  y: 18, label: "PRIMITIVE DEPENDENCY STACK" },
+        { x: 260, y: 18, label: "iPRF COMPOSITION (Theorem 4.4)" },
+        { x: 260, y: 310, label: "PMNS BINARY TREE  (depth = ⌈log₂ m⌉)" },
+        { x: 670, y: 18, label: "KEY HIERARCHY" },
+      ].map((s, i) => (
+        <text key={i} x={s.x} y={s.y} fill={C.dimMid} fontSize={8.5}
+          fontFamily={FONT} letterSpacing={1.5} fontWeight={600}>{s.label}</text>
+      ))}
+
+      {/* Dividers */}
+      <line x1={240} y1={10} x2={240} y2={H - 20} stroke={C.border} strokeWidth={1} />
+      <line x1={650} y1={10} x2={650} y2={H - 20} stroke={C.border} strokeWidth={1} />
+      <line x1={240} y1={300} x2={650} y2={300} stroke={C.border} strokeWidth={1} />
+
+      <g transform="translate(20, 30)"><PrimStack /></g>
+      <g transform="translate(265, 36)"><IprfComposition /></g>
+      <g transform="translate(265, 330)"><PmnsTree /></g>
+      <g transform="translate(665, 36)"><KeyHierarchy /></g>
+
+      {/* Theorem 4.4 callout */}
+      <rect x={260} y={250} width={380} height={42} rx={4}
+        fill={C.stateBg} stroke={C.state} strokeWidth={1} />
+      <text x={450} y={266} fill={C.state} fontSize={9} fontWeight={700}
+        textAnchor="middle" fontFamily={FONT}>Theorem 4.4 (Plinko paper)</text>
+      <text x={450} y={282} fill={C.neutral} fontSize={8.5}
+        textAnchor="middle" fontFamily={FONT}>PRP (fully-secure, small-domain) + PMNS → iPRF</text>
+    </svg>
+  );
+}
+
+// ─── 3. Offline Sequence ─────────────────────────────────────────────────────
+
+function OfflineSeq() {
+  const W = 860, H = 680;
+  const actors = [
+    { id:"client", x:130, label:"Client",    color:C.client },
+    { id:"iprf",   x:360, label:"iPRF",      color:C.crypto },
+    { id:"hstate", x:580, label:"HintState", color:C.state },
+    { id:"server", x:760, label:"Server",    color:C.server },
+  ];
+  const lifY = 80;
+  const amap = Object.fromEntries(actors.map(a => [a.id, a]));
+
+  const steps = [
+    { type:"note",  actor:"client", text:"client.generate_hints(stream)",   y:130 },
+    { type:"arrow", from:"client",  to:"server",  label:"stream_database()",          y:160, ret:false },
+    { type:"frag",  kind:"loop",    label:"for each block α ∈ [0..c−1]",   y:180 },
+    { type:"arrow", from:"server",  to:"client",  label:"blocks[α]  (B·w bytes)",     y:206, ret:true },
+    { type:"self",  actor:"client", label:"decompose entry: i = α·w + β",   y:236 },
+    { type:"arrow", from:"client",  to:"iprf",    label:"F⁻¹(K[α], β)",               y:262, ret:false },
+    { type:"arrow", from:"iprf",    to:"client",  label:"{hint_ids}  Õ(1) results",  y:292, ret:true },
+    { type:"self",  actor:"client", label:"for each j in {hint_ids}:",       y:322 },
+    { type:"self",  actor:"client", label:"  parities[j] ^= entry",          y:342 },
+    { type:"self",  actor:"client", label:"  if β ≥ cutoff[j]: backup_high[j] ^= entry", y:362 },
+    { type:"frag",  kind:"end",                                               y:382 },
+    { type:"note",  actor:"client", text:"HintState fully populated",        y:408 },
+    { type:"arrow", from:"client",  to:"hstate",  label:"store(cutoffs, parities, flips, extras)", y:434, ret:false },
+    { type:"note",  actor:"hstate", text:"λ·w regular + q backup hints",     y:462 },
+    { type:"note",  actor:"client", text:"pipelining: stream n/q entries per query\nto amortize offline phase in background", y:500 },
+  ];
+
+  return (
+    <svg width={W} height={H} style={{ display: "block", margin: "0 auto", fontFamily: FONT }}>
+      <Grid w={W} h={H} step={24} />
+      <defs>
+        {["fwd","ret","stk"].map((id, i) => (
+          <ArrowMarker key={id} id={`offl_${id}`} color={i === 1 ? C.server : C.client} />
+        ))}
+      </defs>
+
+      {/* Actor boxes + lifelines */}
+      {actors.map(a => (
+        <g key={a.id}>
+          <rect x={a.x - 58} y={38} width={116} height={36} rx={4}
+            fill={a.color + "12"} stroke={a.color} strokeWidth={1.5} />
+          <text x={a.x} y={61} fill={a.color} fontSize={11} fontWeight={700} textAnchor="middle">{a.label}</text>
+          <line x1={a.x} y1={74} x2={a.x} y2={H - 20}
+            stroke={a.color + "40"} strokeWidth={1} strokeDasharray="5 4" />
+        </g>
+      ))}
+
+      {/* Steps */}
+      {steps.map((s, i) => {
+        if (s.type === "arrow") {
+          const ax = amap[s.from].x, bx = amap[s.to].x;
+          const id = `os${i}`;
+          const col = s.ret ? amap[s.to].color : amap[s.from].color;
+          return (
+            <g key={i}>
+              <defs><ArrowMarker id={id} color={col} /></defs>
+              <line x1={ax} y1={s.y} x2={bx} y2={s.y}
+                stroke={col} strokeWidth={1.4}
+                strokeDasharray={s.ret ? "6 3" : "none"}
+                markerEnd={`url(#${id})`} />
+              <rect x={Math.min(ax,bx) + 8} y={s.y - 13} width={Math.abs(bx-ax) - 16} height={13}
+                fill={C.bg} />
+              <text x={(ax + bx) / 2} y={s.y - 2} fill={col} fontSize={8.5} textAnchor="middle">{s.label}</text>
+            </g>
+          );
+        }
+        if (s.type === "self") {
+          const ax = amap[s.actor].x;
+          const col = amap[s.actor].color;
+          return (
+            <g key={i}>
+              <path d={`M${ax},${s.y} C${ax+40},${s.y} ${ax+40},${s.y+18} ${ax},${s.y+18}`}
+                fill="none" stroke={col} strokeWidth={1} opacity={0.5} />
+              <text x={ax + 46} y={s.y + 13} fill={C.neutral} fontSize={8.5}>{s.label}</text>
+            </g>
+          );
+        }
+        if (s.type === "note") {
+          const ax = amap[s.actor].x;
+          const lines = s.text.split("\n");
+          const col = amap[s.actor].color;
+          return (
+            <g key={i}>
+              <rect x={ax - 75} y={s.y - 4} width={150} height={lines.length * 14 + 8} rx={3}
+                fill={col + "0e"} stroke={col + "50"} strokeWidth={1} />
+              {lines.map((l, li) => (
+                <text key={li} x={ax} y={s.y + 9 + li * 14} fill={col}
+                  fontSize={8} textAnchor="middle" opacity={0.85}>{l}</text>
+              ))}
+            </g>
+          );
+        }
+        if (s.type === "frag") {
+          const isEnd = s.kind === "end";
+          const x1 = Math.min(...actors.map(a => a.x)) - 68;
+          const x2 = Math.max(...actors.map(a => a.x)) + 70;
+          const col = C.crypto;
+          return (
+            <g key={i}>
+              <line x1={x1} y1={s.y} x2={x2} y2={s.y}
+                stroke={col} strokeWidth={isEnd ? 1 : 1.5}
+                strokeDasharray={isEnd ? "3 4" : "none"} opacity={0.4} />
+              {!isEnd && (
+                <>
+                  <rect x={x1} y={s.y} width={50} height={15} rx={2}
+                    fill={col + "20"} stroke={col} strokeWidth={1} />
+                  <text x={x1 + 5} y={s.y + 11} fill={col} fontSize={8} fontWeight={700}>loop</text>
+                  <text x={x1 + 58} y={s.y + 11} fill={col} fontSize={8} opacity={0.9}>{s.label}</text>
+                </>
+              )}
+            </g>
+          );
+        }
+        return null;
+      })}
+
+      {/* DB index decomposition callout */}
+      <rect x={8} y={520} width={840} height={60} rx={4}
+        fill={C.bgTint} stroke={C.border} strokeWidth={1} />
+      <text x={24} y={540} fill={C.dimMid} fontSize={9} fontFamily={FONT} fontWeight={600}>Database decomposition</text>
+      <text x={24} y={556} fill={C.neutral} fontSize={9} fontFamily={FONT}>
+        n entries partitioned into c = n/w blocks of w consecutive indices.  Index i = α·w + β  (α = block, β = intra-block offset).
+      </text>
+      <text x={24} y={571} fill={C.neutral} fontSize={9} fontFamily={FONT}>
+        Per-block iPRF key: K[α] = PRF(msk, α).  Forward: iF.F(K[α], j) → β  |  Inverse: iF.F⁻¹(K[α], β) → &#123;hint_ids&#125;
+      </text>
+    </svg>
+  );
+}
+
+// ─── 4. Online Sequence ───────────────────────────────────────────────────────
+
+function OnlineSeq() {
+  const W = 860, H = 740;
+  const actors = [
+    { id:"client", x:110, label:"Client",     color:C.client },
+    { id:"iprf",   x:280, label:"iPRF",       color:C.crypto },
+    { id:"cache",  x:460, label:"QueryCache", color:C.state },
+    { id:"server", x:660, label:"Server",     color:C.server },
+    { id:"hstate", x:820, label:"HintState",  color:C.state },
+  ];
+  const amap = Object.fromEntries(actors.map(a => [a.id, a]));
+
+  const steps = [
+    { type:"note",  actor:"client", text:"client.query(index x)",            y:120 },
+    { type:"arrow", from:"client",  to:"cache",  label:"lookup(x)",          y:146, ret:false },
+    { type:"frag",  kind:"alt",     label:"alt [cache hit: repeated query]", y:164 },
+    { type:"arrow", from:"cache",   to:"client", label:"cached_answer",      y:186, ret:true },
+    { type:"self",  actor:"client", label:"issue Query(decoy_index) → server  [privacy]", y:210 },
+    { type:"frag",  kind:"else",    label:"else [cache miss]",               y:234 },
+    { type:"arrow", from:"client",  to:"iprf",   label:"F⁻¹(K[α], β) for block α containing x", y:258, ret:false },
+    { type:"arrow", from:"iprf",    to:"client", label:"{hint_ids} — Õ(1) via PMNS⁻¹ then PRP⁻¹", y:284, ret:true },
+    { type:"self",  actor:"client", label:"select h s.t. x ∈ h.subset ∧ !consumed", y:310 },
+    { type:"self",  actor:"client", label:"random bit mask → assign real subset to pos 0 or 1", y:330 },
+    { type:"self",  actor:"client", label:"offsets: shared between subsets, |S₀|=|S₁|=c/2 blocks", y:350 },
+    { type:"frag",  kind:"end",                                              y:368 },
+    { type:"arrow", from:"client",  to:"server", label:"Query(mask: ⌈c/8⌉ bytes, offsets: c/2 ints)", y:392, ret:false },
+    { type:"self",  actor:"server", label:"p₀ = XOR entries at offsets in subset₀", y:420 },
+    { type:"self",  actor:"server", label:"p₁ = XOR entries at offsets in subset₁", y:440 },
+    { type:"arrow", from:"server",  to:"client", label:"Response(p0: B bytes, p1: B bytes)", y:464, ret:true },
+    { type:"self",  actor:"client", label:"result = p[mask_bit] ⊕ hstate.parities[h]", y:490 },
+    { type:"arrow", from:"client",  to:"cache",  label:"insert(x, result, hint_id)", y:514, ret:false },
+    { type:"arrow", from:"client",  to:"hstate", label:"promote backup → replenish consumed hint", y:538, ret:false },
+    { type:"arrow", from:"client",  to:"iprf",   label:"update K[α] for new hint (Õ(1))", y:562, ret:false },
+    { type:"note",  actor:"client", text:"UpdateDB path (server-initiated)",  y:598 },
+    { type:"arrow", from:"server",  to:"client", label:"Update(index i, delta = u⊕u')", y:624, ret:true },
+    { type:"arrow", from:"client",  to:"iprf",   label:"F⁻¹(K[α_i], β_i) all affected hints", y:650, ret:false },
+    { type:"self",  actor:"client", label:"∀ j ∈ affected: parities[j] ^= delta  Õ(1) hints", y:676 },
+  ];
+
+  return (
+    <svg width={W} height={H} style={{ display: "block", margin: "0 auto", fontFamily: FONT }}>
+      <Grid w={W} h={H} step={24} />
+
+      {/* Actor boxes + lifelines */}
+      {actors.map(a => (
+        <g key={a.id}>
+          <rect x={a.x - 54} y={38} width={108} height={36} rx={4}
+            fill={a.color + "12"} stroke={a.color} strokeWidth={1.5} />
+          <text x={a.x} y={61} fill={a.color} fontSize={10} fontWeight={700} textAnchor="middle">{a.label}</text>
+          <line x1={a.x} y1={74} x2={a.x} y2={H - 20}
+            stroke={a.color + "40"} strokeWidth={1} strokeDasharray="5 4" />
+        </g>
+      ))}
+
+      {steps.map((s, i) => {
+        if (s.type === "arrow") {
+          const ax = amap[s.from].x, bx = amap[s.to].x;
+          const id = `on${i}`;
+          const col = s.ret ? amap[s.to].color : amap[s.from].color;
+          return (
+            <g key={i}>
+              <defs><ArrowMarker id={id} color={col} /></defs>
+              <line x1={ax} y1={s.y} x2={bx} y2={s.y}
+                stroke={col} strokeWidth={1.4}
+                strokeDasharray={s.ret ? "6 3" : "none"}
+                markerEnd={`url(#${id})`} />
+              <rect x={Math.min(ax,bx) + 6} y={s.y - 13} width={Math.abs(bx-ax) - 12} height={13} fill={C.bg} />
+              <text x={(ax+bx)/2} y={s.y - 2} fill={col} fontSize={7.5} textAnchor="middle">{s.label}</text>
+            </g>
+          );
+        }
+        if (s.type === "self") {
+          const ax = amap[s.actor].x, col = amap[s.actor].color;
+          return (
+            <g key={i}>
+              <path d={`M${ax},${s.y} C${ax+36},${s.y} ${ax+36},${s.y+16} ${ax},${s.y+16}`}
+                fill="none" stroke={col} strokeWidth={1} opacity={0.5} />
+              <text x={ax + 40} y={s.y + 12} fill={C.neutral} fontSize={8}>{s.label}</text>
+            </g>
+          );
+        }
+        if (s.type === "note") {
+          const ax = amap[s.actor].x, col = amap[s.actor].color;
+          return (
+            <g key={i}>
+              <rect x={ax - 72} y={s.y - 4} width={144} height={22} rx={3}
+                fill={col + "0e"} stroke={col + "50"} strokeWidth={1} />
+              <text x={ax} y={s.y + 10} fill={col} fontSize={8} textAnchor="middle" opacity={0.85}>{s.text}</text>
+            </g>
+          );
+        }
+        if (s.type === "frag") {
+          const x1 = Math.min(...actors.map(a => a.x)) - 60;
+          const x2 = Math.max(...actors.map(a => a.x)) + 60;
+          const isEnd = s.kind === "end";
+          const isElse = s.kind === "else";
+          const col = C.state;
+          return (
+            <g key={i}>
+              <line x1={x1} y1={s.y} x2={x2} y2={s.y}
+                stroke={col} strokeWidth={isEnd ? 0.8 : 1.4}
+                strokeDasharray={isEnd || isElse ? "3 4" : "none"} opacity={0.4} />
+              {!isEnd && !isElse && (
+                <>
+                  <rect x={x1} y={s.y} width={40} height={15} rx={2} fill={col + "20"} stroke={col} strokeWidth={1} />
+                  <text x={x1 + 5} y={s.y + 11} fill={col} fontSize={8} fontWeight={700}>alt</text>
+                  <text x={x1 + 48} y={s.y + 11} fill={col} fontSize={8} opacity={0.9}>{s.label}</text>
+                </>
+              )}
+              {isElse && (
+                <text x={x1 + 8} y={s.y + 11} fill={col} fontSize={8} opacity={0.9}>{s.label}</text>
+              )}
+            </g>
+          );
+        }
+        return null;
+      })}
+
+      {/* Security note */}
+      <rect x={8} y={H - 54} width={842} height={44} rx={4}
+        fill={C.bgTint} stroke={C.border} strokeWidth={1} />
+      <text x={20} y={H - 36} fill={C.dimMid} fontSize={8.5} fontFamily={FONT} fontWeight={600}>Security invariant</text>
+      <text x={20} y={H - 20} fill={C.neutral} fontSize={8.5} fontFamily={FONT}>
+        Both subsets have exactly c/2 blocks with identical offsets. Server sees two equal-size subsets → cannot distinguish real from fake.  ∀ i,j: View(Query(i)) ≡ View(Query(j))
+      </text>
+    </svg>
+  );
+}
+
+// ─── 5. Data Model (UML class diagram) ───────────────────────────────────────
+
+function DataModel() {
+  const classes = [
+    { id:"Params",    x:20,  y:20,  w:200, color:C.dimMid,
+      st:"«config»", fields:["-n: int  // num_entries","-B: int  // entry_size bytes","-λ: int = 128  // security_param","-w: int = ⌈√n⌉  // block_size","-c: int  // num_blocks = n/w","-r: int  // λ·w  num_reg_hints","-q: int  // num_backup_hints"], methods:[] },
+    { id:"HintState", x:240, y:20,  w:220, color:C.state,
+      st:"«state»",  fields:["-cutoffs[λw+q]: int  // 0 = consumed","-parities[λw+q]: bytes","-flips[λw]: bool  // direction","-extras[q]: int  // extra entry","-backup_parities_high[q]: bytes"], methods:[] },
+    { id:"QueryCache",x:490, y:20,  w:210, color:C.state,
+      st:"«cache»",  fields:["-store: dict[int→CacheEntry]"], methods:["+lookup(idx) → Entry|None","+insert(idx,ans,hint_id)","+invalidate(idx)"] },
+    { id:"Client",    x:20,  y:290, w:200, color:C.client,
+      st:"«actor»",  fields:["-params: Params","-hint_state: HintState","-query_cache: QueryCache","-msk: bytes  // master key","-iprf: iPRF"],
+      methods:["+generate_hints(stream)","+query(indices[]) → [Query]","+extract(responses[]) → [bytes]","+replenish_hints()","+update_hints(updates[])","+remaining_queries() → int"] },
+    { id:"Server",    x:240, y:290, w:200, color:C.server,
+      st:"«actor»",  fields:["-database: list[bytes]","-params: Params"],
+      methods:["+stream_database() → iter","+answer(queries[]) → [Response]","+update_entries(dict) → [Update]"] },
+    { id:"iPRF",      x:490, y:290, w:210, color:C.crypto,
+      st:"«crypto»", fields:["-k1: bytes  // PRP key","-k2: bytes  // PMNS encoding","-prp: PRP","-pmns: PMNS","-block_size w: int","-num_total_hints: int"],
+      methods:["+F(hint_id,α) → offset","+F_inv(offset,α) → {hint_ids}","+rekey(new_k1,new_k2)"] },
+    { id:"PRP",       x:20,  y:570, w:180, color:C.crypto,
+      st:"«crypto»", fields:["-key: bytes","-domain_size: int"],
+      methods:["+pi(x) → int","+pi_inv(y) → int"] },
+    { id:"PMNS",      x:220, y:570, w:200, color:C.crypto,
+      st:"«crypto»", fields:["-key: bytes","-n: int  // domain","-m: int  // range"],
+      methods:["+S(k,x) → int","+S_inv(k,y) → list[int]"] },
+    { id:"Query",     x:440, y:570, w:160, color:C.msg,
+      st:"«DTO»",    fields:["+mask: bytes","+offsets: list[int]"], methods:[] },
+    { id:"Response",  x:620, y:570, w:150, color:C.msg,
+      st:"«DTO»",    fields:["+p0: bytes","+p1: bytes"], methods:[] },
+    { id:"Update",    x:720, y:290, w:150, color:C.danger,
+      st:"«DTO»",    fields:["+index: int","+delta: bytes"], methods:[] },
+  ];
+
+  const relations = [
+    { from:"Client",  to:"HintState",  type:"compose",  label:"1" },
+    { from:"Client",  to:"QueryCache", type:"compose",  label:"1" },
+    { from:"Client",  to:"Params",     type:"assoc",    label:"uses" },
+    { from:"Client",  to:"iPRF",       type:"assoc",    label:"uses" },
+    { from:"Server",  to:"Params",     type:"assoc",    label:"uses" },
+    { from:"Client",  to:"Query",      type:"creates",  label:"creates" },
+    { from:"Server",  to:"Response",   type:"creates",  label:"creates" },
+    { from:"Server",  to:"Update",     type:"creates",  label:"creates" },
+    { from:"iPRF",    to:"PRP",        type:"assoc",    label:"composed" },
+    { from:"iPRF",    to:"PMNS",       type:"assoc",    label:"composed" },
+  ];
+
+  const W = 900, H = 760;
+  const cmap = Object.fromEntries(classes.map(c => [c.id, c]));
+
+  function classH(c) {
+    return 22 + c.fields.length * 13 + (c.methods.length > 0 ? 6 + c.methods.length * 13 : 0) + 8;
+  }
+  function ctr(id) {
+    const c = cmap[id]; const h = classH(c);
+    return { x: c.x + c.w / 2, y: c.y + h / 2 };
+  }
+  function edgePts(e) {
+    const a = cmap[e.from], b = cmap[e.to];
+    const ah = classH(a), bh = classH(b);
+    const ac = { x: a.x + a.w / 2, y: a.y + ah / 2 };
+    const bc = { x: b.x + b.w / 2, y: b.y + bh / 2 };
+    const dx = bc.x - ac.x, dy = bc.y - ac.y;
+    const len = Math.hypot(dx, dy) || 1;
+    const nx = dx / len, ny = dy / len;
+    return {
+      x1: ac.x + nx * a.w / 2, y1: ac.y + ny * ah / 2,
+      x2: bc.x - nx * b.w / 2, y2: bc.y - ny * bh / 2,
+    };
+  }
+
+  const edgeColor = (type) => type === "compose" ? C.state : type === "creates" ? C.msg : C.dimMid;
+
+  return (
+    <svg width={W} height={H} style={{ display: "block", margin: "0 auto", fontFamily: FONT }}>
+      <Grid w={W} h={H} step={24} />
+      <defs>
+        {relations.map((r, i) => <ArrowMarker key={i} id={`dm${i}`} color={edgeColor(r.type)} />)}
+      </defs>
+
+      {/* Section dividers */}
+      {[{ y:270, label:"CONFIGURATION & STATE" }, { y:550, label:"CRYPTO LAYER" }].map((s, i) => (
+        <g key={i}>
+          <line x1={10} y1={s.y} x2={W - 10} y2={s.y} stroke={C.borderMid} strokeWidth={1} strokeDasharray="4 4" />
+          <text x={W / 2} y={s.y - 6} fill={C.dim} fontSize={8.5} textAnchor="middle"
+            letterSpacing={1.5}>{s.label}</text>
+        </g>
+      ))}
+
+      {/* Edges */}
+      {relations.map((r, i) => {
+        const { x1, y1, x2, y2 } = edgePts(r);
+        const mx = (x1 + x2) / 2, my = (y1 + y2) / 2;
+        const col = edgeColor(r.type);
+        const dash = r.type === "assoc" ? "4 3" : "none";
+        return (
+          <g key={i}>
+            <line x1={x1} y1={y1} x2={x2} y2={y2}
+              stroke={col} strokeWidth={1.2} strokeDasharray={dash}
+              markerEnd={`url(#dm${i})`} opacity={0.6} />
+            <text x={mx} y={my - 4} fill={col} fontSize={7.5} textAnchor="middle" opacity={0.9}>{r.label}</text>
+          </g>
+        );
+      })}
+
+      {/* Class boxes */}
+      {classes.map(c => {
+        const h = classH(c);
+        let fy = c.y + 22;
+        return (
+          <g key={c.id}>
+            <rect x={c.x} y={c.y} width={c.w} height={h} rx={4}
+              fill={C.bg} stroke={C.border} strokeWidth={1.2} />
+            {/* Stereotype + name header */}
+            <rect x={c.x} y={c.y} width={c.w} height={22} rx={4} fill={c.color + "10"} />
+            <text x={c.x + c.w / 2} y={c.y + 9} fill={c.color} fontSize={7.5}
+              textAnchor="middle" fontFamily={FONT} opacity={0.85}>{c.st}</text>
+            <text x={c.x + c.w / 2} y={c.y + 19} fill={c.color} fontSize={10} fontWeight={700}
+              textAnchor="middle" fontFamily={FONT}>{c.id}</text>
+            <line x1={c.x} y1={c.y + 22} x2={c.x + c.w} y2={c.y + 22} stroke={C.border} strokeWidth={1} />
+            {/* Fields */}
+            {c.fields.map((f, fi) => {
+              const y = fy + fi * 13 + 10;
+              return <text key={fi} x={c.x + 6} y={y} fill={C.neutral} fontSize={8}>{f}</text>;
+            })}
+            {/* Methods */}
+            {c.methods.length > 0 && (() => {
+              const my0 = fy + c.fields.length * 13 + 6;
+              return (
+                <>
+                  <line x1={c.x} y1={my0} x2={c.x + c.w} y2={my0} stroke={C.border} strokeWidth={0.8} strokeDasharray="2 2" />
+                  {c.methods.map((m, mi) => (
+                    <text key={mi} x={c.x + 6} y={my0 + mi * 13 + 10} fill={C.client} fontSize={8}>{m}</text>
+                  ))}
+                </>
+              );
+            })()}
+          </g>
+        );
+      })}
+    </svg>
+  );
+}
+
+// ─── App ──────────────────────────────────────────────────────────────────────
+
+export default function App() {
+  const [tab, setTab] = useState(0);
+  const panels = [Architecture, CryptoStack, OfflineSeq, OnlineSeq, DataModel];
+  const Panel = panels[tab];
+
+  return (
+    <div style={{ background: C.bg, minHeight: "100vh", fontFamily: SANS }}>
+      <style>{css}</style>
+
+      {/* Header */}
+      <div style={{
+        background: C.bg, borderBottom: `1.5px solid ${C.border}`,
+        padding: "18px 28px 14px",
+        display: "flex", justifyContent: "space-between", alignItems: "flex-end",
+      }}>
+        <div>
+          <div style={{ color: C.dim, fontSize: 9, letterSpacing: 2.5, marginBottom: 3, fontFamily: FONT }}>
+            SYSTEM DESIGN  ·  PIR PROTOCOL  ·  GROUP D — CLIENT-DEPENDENT PREPROCESSING
+          </div>
+          <div style={{ color: C.black, fontSize: 20, fontWeight: 700, fontFamily: SANS }}>
+            Plinko Single-Server PIR
+          </div>
+          <div style={{ color: C.dimMid, fontSize: 10, marginTop: 2, fontFamily: FONT }}>
+            Hoover et al. (2024)  ·  eprint.iacr.org/2024/318  ·  builds on RMS24 + Piano [ZPZS24]
+          </div>
+        </div>
+        <div style={{ display: "flex", gap: 10 }}>
+          {[
+            { val:"Õ(n/r)", sub:"query time", col:C.client },
+            { val:"Õ(1)",   sub:"update time", col:C.server },
+            { val:"OWF",    sub:"assumption", col:C.crypto },
+            { val:"2",      sub:"rounds online", col:C.state },
+          ].map((b, i) => (
+            <div key={i} style={{
+              border: `1px solid ${b.col}30`, background: b.col + "08",
+              borderRadius: 6, padding: "6px 12px", textAlign: "center", minWidth: 72,
+            }}>
+              <div style={{ color: b.col, fontWeight: 700, fontSize: 14, fontFamily: FONT }}>{b.val}</div>
+              <div style={{ color: C.dim, fontSize: 8, fontFamily: FONT }}>{b.sub}</div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* Tabs */}
+      <div style={{
+        display: "flex", gap: 0, borderBottom: `1px solid ${C.border}`,
+        background: C.bgAlt, padding: "0 20px",
+      }}>
+        {TABS.map((t, i) => (
+          <button key={i} className="tab-btn"
+            onClick={() => setTab(i)}
+            style={{
+              padding: "10px 16px",
+              color: tab === i ? C.client : C.dimMid,
+              borderBottom: tab === i ? `2px solid ${C.client}` : "2px solid transparent",
+              fontSize: 10.5, fontFamily: FONT, fontWeight: tab === i ? 700 : 400,
+              background: tab === i ? C.bg : "none",
+            }}>
+            {t}
+          </button>
+        ))}
+      </div>
+
+      {/* Content */}
+      <div style={{ padding: "20px 16px", overflowX: "auto" }}>
+        <Panel />
+      </div>
+    </div>
+  );
+}
